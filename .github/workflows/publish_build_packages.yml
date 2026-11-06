@@ -324,6 +324,8 @@ jobs:
             sudo apt-get update && sudo apt-get install --yes --no-install-recommends libz3-4
           }
           cd "$GITHUB_WORKSPACE"
+          # maturin's container leaves the wheel owned by root.
+          sudo chown -R "$(id -u):$(id -g)" pyrefly/dist
           python scripts/pgo.py bolt \
             --llvm-dir "$llvm_dir/usr/lib/llvm-22" \
             --binary "target/${{ matrix.platform.target }}/release/pyrefly" \
