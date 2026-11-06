@@ -1,0 +1,16 @@
+name: "Test: Release artifacts (no publishing)"
+
+# TEST ONLY: runs the extension tests. Publishes nothing and uses no secrets.
+
+on:
+  workflow_dispatch:
+  # A workflow that is not on the default branch cannot be dispatched yet.
+  push:
+    branches: [ armhf-test ]
+
+permissions:
+  contents: read
+
+jobs:
+  extension_tests:
+    uses: ./.github/workflows/ci_extension_test.yml
