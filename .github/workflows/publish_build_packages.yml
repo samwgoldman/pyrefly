@@ -1,18 +1,37 @@
 name: "Publish: Build packages"
 
+# The release wheels are the only release build: publish_upload_binaries.yml
+# takes the GitHub release binaries out of these wheels, so both channels ship
+# identical executables.
+#
+# The Linux x86-64 and ARM64, macOS ARM64, and Windows x86-64 executables are
+# optimized with PGO, trained by scripts/pgo.py on its corpus. The Linux x86-64
+# executable is also optimized with BOLT. Other targets are cross-compiled, so
+# the training workload cannot run on the build machine.
+
 on:
   # publish_to_pypi.yml calls this workflow to build the release wheels.
   # The nightly run tests the targets that no other workflow builds: i686,
-  # ppc64le, musl, and the aarch64 variants.
+  # ppc64le, musl, and the aarch64 variants. It also exercises the PGO and
+  # BOLT pipeline before a release depends on it.
   schedule:
     - cron: '0 8 * * *'
   workflow_dispatch:
   workflow_call:
+    inputs:
+      ref:
+        description: 'Git ref to build (default: the ref that triggered the workflow)'
+        required: false
+        type: string
+        default: ''
 
 env:
   PACKAGE_NAME: pyrefly
   BINARY_NAME: pyrefly
   PYTHON_VERSION: "3.12"
+  # The PGO training corpus pins its dependencies by date, so a fixed uv
+  # version keeps the training workload reproducible.
+  UV_VERSION: "0.11.17"
 
 jobs:
   sdist:
@@ -20,6 +39,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.ref }}
           submodules: recursive
           persist-credentials: false
       - uses: actions/setup-python@v6
@@ -53,9 +73,11 @@ jobs:
             arch: x64
           - target: aarch64
             arch: arm64
+            pgo: true
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.ref }}
           submodules: recursive
           persist-credentials: false
       - uses: actions/setup-python@v6
@@ -65,10 +87,28 @@ jobs:
       - name: Set jemalloc page size for macOS ARM64
         if: ${{ matrix.platform.target == 'aarch64' }}
         run: echo "JEMALLOC_SYS_WITH_LG_PAGE=14" >> $GITHUB_ENV
+      - name: Install uv for PGO training
+        if: ${{ matrix.platform.pgo }}
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.UV_VERSION }}
+      - name: Train PGO profile
+        id: pgo
+        if: ${{ matrix.platform.pgo }}
+        run: |
+          rustup component add llvm-tools
+          python scripts/pgo.py pgo --train-only
+          echo "toolchain=$(rustc --version | cut -d ' ' -f2)" >> "$GITHUB_OUTPUT"
+          echo "RUSTFLAGS=-Cprofile-use=$GITHUB_WORKSPACE/target/pgo/pyrefly.profdata -Cllvm-args=--profile-summary-hot-count=$(cat target/pgo/pyrefly.profile-hot-count)" >> "$GITHUB_ENV"
+          # Keep Clang from applying the Rust profile to the C dependencies.
+          echo "CFLAGS=-fno-profile-generate -fno-profile-use" >> "$GITHUB_ENV"
+          echo "CXXFLAGS=-fno-profile-generate -fno-profile-use" >> "$GITHUB_ENV"
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
+          # The profile only matches the compiler that recorded it.
+          rust-toolchain: ${{ steps.pgo.outputs.toolchain }}
           args: --release --out dist
           working-directory: pyrefly
       - name: Test wheel
@@ -92,6 +132,7 @@ jobs:
         platform:
           - target: x86_64-pc-windows-msvc
             arch: x64
+            pgo: true
           - target: i686-pc-windows-msvc
             arch: x86
           - target: aarch64-pc-windows-msvc
@@ -99,6 +140,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.ref }}
           submodules: recursive
           persist-credentials: false
       - uses: actions/setup-python@v6
@@ -109,10 +151,26 @@ jobs:
         # we need to set CARGO_HOME to a high-up directory on Windows machines, since some dependencies cloned
         # by Cargo have long paths and will cause builds/tests to fail
         run: echo "CARGO_HOME=C:\\cargo" >> $env:GITHUB_ENV
+      - name: Install uv for PGO training
+        if: ${{ matrix.platform.pgo }}
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.UV_VERSION }}
+      - name: Train PGO profile
+        id: pgo
+        if: ${{ matrix.platform.pgo }}
+        shell: bash
+        run: |
+          rustup component add llvm-tools
+          python scripts/pgo.py pgo --train-only
+          echo "toolchain=$(rustc --version | cut -d ' ' -f2)" >> "$GITHUB_OUTPUT"
+          echo "RUSTFLAGS=-Cprofile-use=$GITHUB_WORKSPACE/target/pgo/pyrefly.profdata -Cllvm-args=--profile-summary-hot-count=$(cat target/pgo/pyrefly.profile-hot-count)" >> "$GITHUB_ENV"
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
+          # The profile only matches the compiler that recorded it.
+          rust-toolchain: ${{ steps.pgo.outputs.toolchain }}
           args: --release --out dist
           working-directory: pyrefly
       - name: Test wheel
@@ -131,36 +189,74 @@ jobs:
           path: pyrefly/dist
 
   linux:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.platform.os }}
     strategy:
       matrix:
-        target:
-          - x86_64-unknown-linux-gnu
-          - i686-unknown-linux-gnu
-          - aarch64-unknown-linux-gnu
-          - powerpc64le-unknown-linux-gnu
+        platform:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            arch: x64
+            pgo: true
+          - target: i686-unknown-linux-gnu
+            os: ubuntu-latest
+            arch: x64
+          # PGO training runs the instrumented executable, so ARM64 builds on
+          # an ARM64 machine rather than cross-compiling.
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+            arch: arm64
+            pgo: true
+          - target: powerpc64le-unknown-linux-gnu
+            os: ubuntu-latest
+            arch: x64
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.ref }}
           submodules: recursive
           persist-credentials: false
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-          architecture: x64
+          architecture: ${{ matrix.platform.arch }}
+      - name: Set jemalloc page size for ARM64 Linux
+        if: ${{ startsWith(matrix.platform.target, 'aarch64') }}
+        run: echo "JEMALLOC_SYS_WITH_LG_PAGE=16" >> $GITHUB_ENV
+      - name: Install uv for PGO training
+        if: ${{ matrix.platform.pgo }}
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.UV_VERSION }}
+      - name: Train PGO profile
+        id: pgo
+        if: ${{ matrix.platform.pgo }}
+        run: |
+          rustup component add llvm-tools
+          python scripts/pgo.py pgo --train-only
+          echo "toolchain=$(rustc --version | cut -d ' ' -f2)" >> "$GITHUB_OUTPUT"
+          RUSTFLAGS="-Cprofile-use=$GITHUB_WORKSPACE/target/pgo/pyrefly.profdata -Cllvm-args=--profile-summary-hot-count=$(cat target/pgo/pyrefly.profile-hot-count)"
+          if [ "${{ matrix.platform.target }}" = x86_64-unknown-linux-gnu ]; then
+            # BOLT needs the relocations to rewrite the executable.
+            RUSTFLAGS="$RUSTFLAGS -Clink-arg=-Wl,--emit-relocs"
+          fi
+          echo "RUSTFLAGS=$RUSTFLAGS" >> "$GITHUB_ENV"
+          # The BOLT step finds the executable here after maturin's container exits.
+          echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/target" >> "$GITHUB_ENV"
       - name: Build wheels
-        if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' }}
+        if: ${{ matrix.platform.target == 'x86_64-unknown-linux-gnu' }}
         uses: PyO3/maturin-action@v1
         with:
-          target: ${{ matrix.target }}
+          target: ${{ matrix.platform.target }}
+          # The profile only matches the compiler that recorded it.
+          rust-toolchain: ${{ steps.pgo.outputs.toolchain }}
           manylinux: auto
           args: --release --out dist
           working-directory: pyrefly
       - name: Build wheels i686
-        if: ${{ matrix.target == 'i686-unknown-linux-gnu' }}
+        if: ${{ matrix.platform.target == 'i686-unknown-linux-gnu' }}
         uses: PyO3/maturin-action@v1
         with:
-          target: ${{ matrix.target }}
+          target: ${{ matrix.platform.target }}
           manylinux: auto
           args: --release --out dist
           working-directory: pyrefly
@@ -170,10 +266,11 @@ jobs:
           # otherwise runs out of memory on i686.
           CARGO_PROFILE_RELEASE_DEBUG: 0
       - name: Build wheels aarch64
-        if: ${{ startsWith(matrix.target, 'aarch64') }}
+        if: ${{ startsWith(matrix.platform.target, 'aarch64') }}
         uses: PyO3/maturin-action@v1
         with:
-          target: ${{ matrix.target }}
+          target: ${{ matrix.platform.target }}
+          rust-toolchain: ${{ steps.pgo.outputs.toolchain }}
           manylinux: auto
           args: --release --out dist
           working-directory: pyrefly
@@ -182,10 +279,10 @@ jobs:
           # See https://github.com/facebook/pyrefly/issues/380
           JEMALLOC_SYS_WITH_LG_PAGE: 16
       - name: Build wheels ppc64le
-        if: ${{ startsWith(matrix.target, 'powerpc64le') }}
+        if: ${{ startsWith(matrix.platform.target, 'powerpc64le') }}
         uses: PyO3/maturin-action@v1
         with:
-          target: ${{ matrix.target }}
+          target: ${{ matrix.platform.target }}
           manylinux: auto
           args: --release --out dist
           working-directory: pyrefly
@@ -193,15 +290,41 @@ jobs:
           # ppc64le-linux uses 64KB pages (2^16 bytes). JEMALLOC_SYS_WITH_LG_PAGE is
           # log2 of the page size, same as aarch64-linux.
           JEMALLOC_SYS_WITH_LG_PAGE: 16
+      - name: Optimize with BOLT
+        if: ${{ matrix.platform.target == 'x86_64-unknown-linux-gnu' }}
+        run: |
+          llvm_dir="$RUNNER_TEMP/bolt"
+          mkdir -p "$llvm_dir"
+          cd "$llvm_dir"
+          version="22.1.8~++20260714014902+ca7933e47d3a-1~exp1~20260714135019.80"
+          for package in bolt-22 libbolt-22-dev; do
+            curl --fail --location --retry 3 -o "$package.deb" \
+              "https://apt.llvm.org/noble/pool/main/l/llvm-toolchain-22/${package}_${version}_amd64.deb"
+          done
+          sha256sum --check <<'EOF'
+          97a9e4e8d2b2219757c38abef93e913793ebc64580aa51207bd23941c44ec070  bolt-22.deb
+          48639dafeb45892eec58f5d8a2d0d612ce791a2f713f06c794b71d6a72fa582d  libbolt-22-dev.deb
+          EOF
+          dpkg-deb --extract bolt-22.deb .
+          dpkg-deb --extract libbolt-22-dev.deb .
+          # llvm-bolt links against Z3.
+          ldconfig -p | grep -q libz3.so.4 || {
+            sudo apt-get update && sudo apt-get install --yes --no-install-recommends libz3-4
+          }
+          cd "$GITHUB_WORKSPACE"
+          python scripts/pgo.py bolt \
+            --llvm-dir "$llvm_dir/usr/lib/llvm-22" \
+            --binary "target/${{ matrix.platform.target }}/release/pyrefly" \
+            --wheel pyrefly/dist/"${PACKAGE_NAME}"-*.whl
       - name: Test wheel (unactivated venv)
-        if: ${{ startsWith(matrix.target, 'x86_64') }}
+        if: ${{ startsWith(matrix.platform.target, 'x86_64') }}
         run: |
           python -m venv .venv
           .venv/bin/python -m pip install pyrefly/dist/"${PACKAGE_NAME}"-*.whl --force-reinstall
           .venv/bin/python -m "${BINARY_NAME}" --version
           rm -rf .venv
       - name: Test wheel
-        if: ${{ startsWith(matrix.target, 'x86_64') }}
+        if: ${{ startsWith(matrix.platform.target, 'x86_64') }}
         run: |
           pip install pyrefly/dist/"${PACKAGE_NAME}"-*.whl --force-reinstall
           "${BINARY_NAME}" --version
@@ -211,7 +334,7 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v6
         with:
-          name: wheels-${{ matrix.target }}
+          name: wheels-${{ matrix.platform.target }}
           path: pyrefly/dist
 
   musllinux:
@@ -224,6 +347,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.ref }}
           submodules: recursive
           persist-credentials: false
       - uses: actions/setup-python@v6
