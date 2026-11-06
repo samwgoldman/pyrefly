@@ -446,3 +446,6 @@ jobs:
         uses: actions/upload-artifact/merge@v4
         with:
           name: dist
+          # Other jobs of the calling run, such as the VS Code extension
+          # packaging, upload artifacts too. `dist` goes to PyPI as it is.
+          pattern: wheels-*
