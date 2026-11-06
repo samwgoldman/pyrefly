@@ -304,7 +304,7 @@ def build_with_pgo(
     )
     profiles = sorted(profile_dir.glob("*.profraw"))
     merged = target_dir / "pyrefly.profdata"
-    run([profdata, "merge", "--output", merged, *profiles], environment=environment)
+    merge_profiles(profdata, profiles, merged)
 
     # LLVM optimizes code outside the 95th percentile of the profile counts for
     # size, but treats all code within the 99th as hot and inlines it
@@ -350,6 +350,42 @@ def build_with_pgo(
     if "windows" not in target:
         check_profile_use(merged, binary)
     print(f"PGO-optimized binary: {binary}")
+
+
+# No block runs this often during training, which takes minutes. Some compilers
+# record such counts anyway: rustc 1.99 on x86-64 records about 10^15 for one
+# block of `num_bigint`'s `to_radix_le`, which training calls twice. One such
+# count dominates the profile summary, so LLVM would treat everything else as
+# cold.
+IMPLAUSIBLE_COUNT = 10**12
+
+
+def merge_profiles(profdata: Path, profiles: list[Path], merged: Path) -> None:
+    """Merge raw profiles, leaving out functions with implausible counts."""
+    excluded: list[str] = []
+    while True:
+        run(
+            [
+                profdata,
+                "merge",
+                "--output",
+                merged,
+                *(f"--no-function={re.escape(name)}" for name in excluded),
+                *profiles,
+            ],
+            environment=dict(os.environ),
+        )
+        top = subprocess.run(
+            [profdata, "show", "--topn=1", merged],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        match = re.search(r"^  (\S+), max count = (\d+)$", top, re.MULTILINE)
+        if match is None or int(match.group(2)) < IMPLAUSIBLE_COUNT:
+            return
+        print(f"Leaving out implausible counts for {match.group(1)}", flush=True)
+        excluded.append(match.group(1))
 
 
 def check_profile_use(profile: Path, binary: Path) -> None:
