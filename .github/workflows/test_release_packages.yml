@@ -1,0 +1,44 @@
+name: "Test: release packages and extension tests (no publishing)"
+
+# TEST ONLY: builds the release wheels, packages and tests the extension from
+# them, and makes the GitHub release archives. Publishes nothing.
+
+on:
+  push:
+    branches: [ kyle-test ]
+
+permissions:
+  contents: read
+
+jobs:
+  wheels:
+    uses: ./.github/workflows/publish_build_packages.yml
+
+  extension:
+    needs: wheels
+    uses: ./.github/workflows/ci_extension_test.yml
+    with:
+      wheels: true
+
+  archives:
+    needs: wheels
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v7
+        with:
+          name: dist
+          path: dist
+      - run: python3 scripts/wheel_binaries.py archive dist archives
+      - uses: actions/upload-artifact@v6
+        with:
+          name: archives
+          path: archives
+
+  prerelease_flag:
+    needs: extension
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "prerelease_flag='${{ needs.extension.outputs.prerelease_flag }}'"

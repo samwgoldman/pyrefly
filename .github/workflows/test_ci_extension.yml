@@ -1,0 +1,14 @@
+name: "Test: CI extension build and tests"
+
+# TEST ONLY: runs the pull-request extension build and tests. Publishes nothing.
+
+on:
+  push:
+    branches: [ kyle-test ]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci_extension_test.yml
