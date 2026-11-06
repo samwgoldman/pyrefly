@@ -198,8 +198,9 @@ jobs:
     strategy:
       matrix:
         platform:
+          # Matches the Ubuntu release of the pinned BOLT packages.
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-24.04
             arch: x64
             pgo: true
           - target: i686-unknown-linux-gnu
