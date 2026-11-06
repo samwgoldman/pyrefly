@@ -4,10 +4,11 @@ name: "Publish: Build packages"
 # takes the GitHub release binaries out of these wheels, so both channels ship
 # identical executables.
 #
-# The Linux x86-64 and ARM64 (glibc and musl), macOS ARM64, and Windows x86-64
-# executables are optimized with PGO, trained by scripts/pgo.py on its corpus.
-# The Linux x86-64 glibc executable is also optimized with BOLT. Other targets
-# are cross-compiled, so the training workload cannot run on the build machine.
+# The Linux x86-64 (glibc and musl), Linux ARM64 (glibc), macOS ARM64, and
+# Windows x86-64 executables are optimized with PGO, trained by scripts/pgo.py on
+# its corpus. The Linux x86-64 glibc executable is also optimized with BOLT.
+# Other targets are cross-compiled, so the training workload cannot run on the
+# build machine.
 
 on:
   # publish_to_pypi.yml calls this workflow to build the release wheels.
@@ -356,9 +357,12 @@ jobs:
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             arch: x64
+            pgo: true
+          # The instrumented build cannot compile jemalloc for ARM64 musl with
+          # Ubuntu's musl toolchain, so this target stays cross-compiled.
           - target: aarch64-unknown-linux-musl
-            os: ubuntu-24.04-arm
-            arch: arm64
+            os: ubuntu-latest
+            arch: x64
     steps:
       - uses: actions/checkout@v6
         with:
@@ -375,11 +379,13 @@ jobs:
         # See https://github.com/facebook/pyrefly/issues/380
         run: echo "JEMALLOC_SYS_WITH_LG_PAGE=16" >> "$GITHUB_ENV"
       - name: Install uv for PGO training
+        if: ${{ matrix.platform.pgo }}
         uses: astral-sh/setup-uv@v7
         with:
           version: ${{ env.UV_VERSION }}
       - name: Train PGO profile
         id: pgo
+        if: ${{ matrix.platform.pgo }}
         run: |
           # The instrumented build compiles jemalloc for musl.
           sudo apt-get update && sudo apt-get install --yes --no-install-recommends musl-tools
@@ -401,6 +407,7 @@ jobs:
           args: --release --out dist
           working-directory: pyrefly
       - name: Check PGO profile
+        if: ${{ matrix.platform.pgo }}
         run: python scripts/pgo.py check --binary "target/${{ matrix.platform.target }}/release/pyrefly"
       - name: Test wheel
         if: ${{ matrix.platform.target == 'x86_64-unknown-linux-musl' }}
