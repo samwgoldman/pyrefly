@@ -14,50 +14,13 @@ env:
   UV_VERSION: "0.11.17"
 
 jobs:
-  first:
-    strategy:
-      fail-fast: false
-      matrix:
-        platform:
-          - {os: ubuntu-24.04, pgo: true}
-          - {os: ubuntu-24.04-arm, pgo: true}
-          - {os: macos-15, pgo: true}
-          - {os: windows-latest, pgo: true}
-    runs-on: ${{ matrix.platform.os }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-      - name: Restore the PGO training corpus
-        if: ${{ matrix.platform.pgo }}
-        uses: actions/cache@v6
-        with:
-          path: target/pgo/corpus
-          # scripts/pgo.py fetches only the projects whose pinned revision
-          # changed, so an older cache still saves most of the download.
-          key: pgo-corpus-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/pgo.py') }}
-          restore-keys: pgo-corpus-${{ runner.os }}-${{ runner.arch }}-
-      - uses: astral-sh/setup-uv@v7
-        with:
-          version: ${{ env.UV_VERSION }}
-      - name: Prepare the corpus
-        shell: bash
-        run: |
-          python scripts/pgo.py corpus | tee corpus.log
-          echo "fetches: $(grep -c ' fetch ' corpus.log || true)"
-
   second:
-    needs: first
     strategy:
       fail-fast: false
       matrix:
         platform:
           - {os: ubuntu-24.04, pgo: true}
           - {os: ubuntu-24.04-arm, pgo: true}
-          - {os: macos-15, pgo: true}
           - {os: windows-latest, pgo: true}
     runs-on: ${{ matrix.platform.os }}
     steps:
