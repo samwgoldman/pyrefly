@@ -99,10 +99,12 @@ jobs:
           rustup component add llvm-tools
           python scripts/pgo.py pgo --train-only
           echo "toolchain=$(rustc --version | cut -d ' ' -f2)" >> "$GITHUB_OUTPUT"
-          echo "RUSTFLAGS=-Cprofile-use=$GITHUB_WORKSPACE/target/pgo/pyrefly.profdata -Cllvm-args=--profile-summary-hot-count=$(cat target/pgo/pyrefly.profile-hot-count)" >> "$GITHUB_ENV"
-          # Keep Clang from applying the Rust profile to the C dependencies.
-          echo "CFLAGS=-fno-profile-generate -fno-profile-use" >> "$GITHUB_ENV"
-          echo "CXXFLAGS=-fno-profile-generate -fno-profile-use" >> "$GITHUB_ENV"
+          {
+            echo "RUSTFLAGS=-Cprofile-use=$GITHUB_WORKSPACE/target/pgo/pyrefly.profdata -Cllvm-args=--profile-summary-hot-count=$(cat target/pgo/pyrefly.profile-hot-count)"
+            # Keep Clang from applying the Rust profile to the C dependencies.
+            echo "CFLAGS=-fno-profile-generate -fno-profile-use"
+            echo "CXXFLAGS=-fno-profile-generate -fno-profile-use"
+          } >> "$GITHUB_ENV"
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -111,6 +113,9 @@ jobs:
           rust-toolchain: ${{ steps.pgo.outputs.toolchain }}
           args: --release --out dist
           working-directory: pyrefly
+      - name: Check PGO profile
+        if: ${{ matrix.platform.pgo }}
+        run: python scripts/pgo.py check --binary target/aarch64-apple-darwin/release/pyrefly
       - name: Test wheel
         if: ${{ matrix.platform.target == 'aarch64' }}
         run: |
@@ -239,9 +244,11 @@ jobs:
             # BOLT needs the relocations to rewrite the executable.
             RUSTFLAGS="$RUSTFLAGS -Clink-arg=-Wl,--emit-relocs"
           fi
-          echo "RUSTFLAGS=$RUSTFLAGS" >> "$GITHUB_ENV"
-          # The BOLT step finds the executable here after maturin's container exits.
-          echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/target" >> "$GITHUB_ENV"
+          {
+            echo "RUSTFLAGS=$RUSTFLAGS"
+            # The BOLT step finds the executable here after maturin's container exits.
+            echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/target"
+          } >> "$GITHUB_ENV"
       - name: Build wheels
         if: ${{ matrix.platform.target == 'x86_64-unknown-linux-gnu' }}
         uses: PyO3/maturin-action@v1
@@ -290,6 +297,9 @@ jobs:
           # ppc64le-linux uses 64KB pages (2^16 bytes). JEMALLOC_SYS_WITH_LG_PAGE is
           # log2 of the page size, same as aarch64-linux.
           JEMALLOC_SYS_WITH_LG_PAGE: 16
+      - name: Check PGO profile
+        if: ${{ matrix.platform.pgo }}
+        run: python scripts/pgo.py check --binary "target/${{ matrix.platform.target }}/release/pyrefly"
       - name: Optimize with BOLT
         if: ${{ matrix.platform.target == 'x86_64-unknown-linux-gnu' }}
         run: |

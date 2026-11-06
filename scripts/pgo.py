@@ -12,6 +12,7 @@ edits. The release workflows call this script; it also runs locally:
 
     python3 scripts/pgo.py pgo                  # PGO-optimized binary
     python3 scripts/pgo.py pgo --train-only     # Only the merged profile
+    python3 scripts/pgo.py check --binary <pgo binary>
     python3 scripts/pgo.py bolt --llvm-dir <dir> --binary <pgo binary>
 
 `pgo --train-only` writes `pyrefly.profdata` and `pyrefly.profile-hot-count`
@@ -36,11 +37,10 @@ import shlex
 import shutil
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import zipfile
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -176,6 +176,7 @@ CORPUS = (
     ),
 )
 
+
 @dataclass(frozen=True, slots=True)
 class LanguageServerSession:
     """An editing session: the first open file is edited with `error_edit`,
@@ -196,6 +197,7 @@ LSP_SESSION = LanguageServerSession(
     ),
     error_edit=("return F.linear(input, self.weight, self.bias)", "return 1 + ''"),
 )
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -227,10 +229,17 @@ def main() -> None:
         help="Binary to optimize in place; link it with `-Wl,--emit-relocs`",
     )
     bolt.add_argument("--wheel", type=Path, help="Wheel whose binary to replace")
+    check = subcommands.add_parser(
+        "check", help="Check that a binary was built with the merged profile"
+    )
+    check.add_argument("--binary", type=Path, required=True)
     subcommands.add_parser("corpus", help="Only prepare the training corpus")
     args = parser.parse_args()
 
     target_dir = args.target_dir.resolve()
+    if args.command == "check":
+        check_profile_use(target_dir / "pyrefly.profdata", args.binary)
+        return
     corpus = prepare_corpus(target_dir)
     if args.command == "pgo":
         build_with_pgo(target_dir, corpus, args.target, args.train_only, args.debug)
@@ -264,18 +273,20 @@ def build_with_pgo(
                 environment.get(variable), "-fno-profile-generate -fno-profile-use"
             )
 
-    # Thin LTO makes the instrumented build much faster. LTO runs after the
-    # instrumentation pass, so the profile still matches the fat-LTO release
-    # build. Codegen units are left alone because they change which call sites
-    # the pre-instrumentation inliner sees.
+    # Thin LTO makes the instrumented build much faster, and LTO runs after
+    # the instrumentation pass, so the profile still matches the fat-LTO
+    # release build. It is passed to the `pyrefly` crate alone: changing the
+    # Cargo profile would change the hash in every symbol name, and LLVM matches
+    # profile records to functions by symbol name.
     instrumented_dir = target_dir / "instrumented"
     run(
-        cargo_build(target, debug),
+        [
+            *cargo_build(target, debug, "rustc"),
+            *(() if debug else ("--", "-Clto=thin")),
+        ],
         environment=environment
         | {
             "CARGO_TARGET_DIR": str(instrumented_dir),
-            "CARGO_PROFILE_RELEASE_LTO": "thin",
-            "CARGO_PROFILE_RELEASE_DEBUG": "0",
             "RUSTFLAGS": append_flags(
                 environment.get("RUSTFLAGS"), f"-Cprofile-generate={profile_dir}"
             ),
@@ -294,22 +305,25 @@ def build_with_pgo(
     merged = target_dir / "pyrefly.profdata"
     run([profdata, "merge", "--output", merged, *profiles], environment=environment)
 
-    # LLVM optimizes for size below the 95th percentile of the profile but
-    # treats code as hot down to the 99th. Using the 95th for both avoids
-    # inlining moderately hot code, which grows the binary for little gain.
+    # LLVM optimizes code outside the 95th percentile of the profile counts for
+    # size, but treats all code within the 99th as hot and inlines it
+    # aggressively. A hot threshold at the 97th percentile measured faster than
+    # either and keeps the binary smaller than the default.
     summary = subprocess.run(
         [
             profdata,
             "show",
             "--detailed-summary",
-            "--detailed-summary-cutoffs=950000",
+            "--detailed-summary-cutoffs=970000",
             merged,
         ],
         check=True,
         capture_output=True,
         text=True,
     ).stdout
-    match = re.search(r"with count >= (\d+) account for 95% of the total counts", summary)
+    match = re.search(
+        r"with count >= (\d+) account for 97% of the total counts", summary
+    )
     if match is None or int(match.group(1)) <= 0:
         raise RuntimeError(f"Could not find a hot count in:\n{summary}")
     hot_count = match.group(1)
@@ -330,7 +344,44 @@ def build_with_pgo(
             ),
         },
     )
-    print(f"PGO-optimized binary: {built_binary(target_dir, target, debug)}")
+    binary = built_binary(target_dir, target, debug)
+    # PE executables have no symbol table to check.
+    if "windows" not in target:
+        check_profile_use(merged, binary)
+    print(f"PGO-optimized binary: {binary}")
+
+
+def check_profile_use(profile: Path, binary: Path) -> None:
+    """Fail unless most functions that ran during training exist in `binary`.
+
+    LLVM matches profile records to functions by symbol name, and silently
+    ignores the profile for a function it cannot match. A build whose crate
+    hashes differ from the instrumented build's, e.g. because its Cargo profile
+    or target differs, ends up with almost no profile. Functions that were
+    inlined everywhere have no symbol, so even a matching build finds only most
+    of them.
+    """
+    covered = subprocess.run(
+        [llvm_tool("llvm-profdata"), "show", "--covered", profile],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.split()
+    # Local functions are recorded as `<module>;<symbol>`.
+    names = [name.rpartition(";")[2] for name in covered]
+    symbols = subprocess.run(
+        [llvm_tool("llvm-nm"), "--just-symbol-name", "--defined-only", binary],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.split()
+    # Mach-O symbols carry an extra leading underscore.
+    if sys.platform == "darwin":
+        symbols = [symbol.removeprefix("_") for symbol in symbols]
+    matched = len(set(names) & set(symbols)) / len(set(names))
+    print(f"{matched:.0%} of the trained functions are in {binary}")
+    if matched < 0.5:
+        raise RuntimeError("The binary was not built with the trained profile")
 
 
 def optimize_with_bolt(
@@ -473,11 +524,15 @@ def prepare_corpus(target_dir: Path) -> dict[str, Path]:
     uv = shutil.which("uv")
     if uv is None:
         raise RuntimeError("uv is required to install the corpus dependencies")
-    git_environment = os.environ | {"GIT_TERMINAL_PROMPT": "0", "GIT_LFS_SKIP_SMUDGE": "1"}
+    git_environment = os.environ | {
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_LFS_SKIP_SMUDGE": "1",
+    }
     corpus = {}
     for project in CORPUS:
         checkout = target_dir / "corpus" / project.name
-        git = ["git", "-C", str(checkout)]
+        # Some PyTorch paths exceed the default Windows path length limit.
+        git = ["git", "-c", "core.longpaths=true", "-C", str(checkout)]
         if not (checkout / ".git").is_dir():
             checkout.mkdir(parents=True, exist_ok=True)
             run([*git, "init", "--quiet"], environment=git_environment)
@@ -601,7 +656,7 @@ def train(
     print(f"  {time.monotonic() - started:.1f}s", flush=True)
 
 
-def language_server_session(
+def language_server_session(  # noqa: C901
     binary: Path,
     root: Path,
     environment: dict[str, str],
@@ -640,7 +695,7 @@ def language_server_session(
 
     next_id = 0
 
-    def request(method: str, params: dict[str, object] | None) -> object:
+    def request(method: str, params: Mapping[str, object] | None) -> object:
         nonlocal next_id
         next_id += 1
         send({"id": next_id, "method": method, "params": params})
@@ -657,7 +712,7 @@ def language_server_session(
                     raise RuntimeError(f"{method} failed: {message['error']}")
                 return message.get("result")
 
-    def notify(method: str, params: dict[str, object]) -> None:
+    def notify(method: str, params: Mapping[str, object]) -> None:
         send({"method": method, "params": params})
 
     def document(path: str) -> dict[str, str]:
@@ -680,7 +735,10 @@ def language_server_session(
             },
         )
         notify("initialized", {})
-        texts = {path: (root / path).read_text() for path in session.open_files}
+        texts = {
+            path: (root / path).read_text(encoding="utf-8")
+            for path in session.open_files
+        }
         for path, text in texts.items():
             notify(
                 "textDocument/didOpen",
@@ -699,18 +757,26 @@ def language_server_session(
         lines = original.splitlines()
         for path, text in texts.items():
             for line_number in range(0, len(text.splitlines()), 40):
-                position = {"textDocument": document(path), "position": {"line": line_number, "character": 8}}
+                position = {
+                    "textDocument": document(path),
+                    "position": {"line": line_number, "character": 8},
+                }
                 request("textDocument/hover", position)
                 request("textDocument/definition", position)
                 request("textDocument/completion", position)
         position = {
             "textDocument": document(edited),
             "position": {
-                "line": next(i for i, line in enumerate(lines) if line.startswith("class ")),
+                "line": next(
+                    i for i, line in enumerate(lines) if line.startswith("class ")
+                ),
                 "character": 7,
             },
         }
-        request("textDocument/references", position | {"context": {"includeDeclaration": True}})
+        request(
+            "textDocument/references",
+            position | {"context": {"includeDeclaration": True}},
+        )
         request("workspace/symbol", {"query": "Module"})
 
         baseline = len(diagnostics(edited))
@@ -740,10 +806,10 @@ def language_server_session(
             process.wait()
 
 
-def cargo_build(target: str, debug: bool) -> list[str]:
+def cargo_build(target: str, debug: bool, command: str = "build") -> list[str]:
     return [
         "cargo",
-        "build",
+        command,
         *(() if debug else ("--release",)),
         "--locked",
         "--manifest-path",
@@ -764,7 +830,10 @@ def built_binary(target_dir: Path, target: str, debug: bool) -> Path:
 
 def rustc_host() -> str:
     output = subprocess.check_output(["rustc", "-vV"], cwd=REPOSITORY_ROOT, text=True)
-    return re.search(r"^host: (\S+)", output, re.MULTILINE).group(1)
+    match = re.search(r"^host: (\S+)", output, re.MULTILINE)
+    if match is None:
+        raise RuntimeError(f"No host in `rustc -vV` output:\n{output}")
+    return match.group(1)
 
 
 def llvm_tool(name: str) -> Path:
@@ -784,7 +853,7 @@ def append_flags(existing: str | None, additional: str) -> str:
 
 
 def run(
-    command: list[str | Path],
+    command: Sequence[str | Path],
     *,
     environment: dict[str, str],
     cwd: Path = REPOSITORY_ROOT,
@@ -799,4 +868,7 @@ def run(
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
+        raise SystemExit(f"error: {error}") from error
