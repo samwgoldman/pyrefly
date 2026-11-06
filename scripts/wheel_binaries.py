@@ -28,7 +28,7 @@ from pathlib import Path
 # The first platform tag of each wheel, mapped to the name of its archive.
 ARCHIVE_NAMES = {
     r"manylinux\w*_x86_64": "pyrefly-linux-x86_64",
-    r"manylinux\w*_i686": "pyrefly-linux-i686",
+    # TEST ONLY: no i686 wheel
     r"manylinux\w*_aarch64": "pyrefly-linux-arm64",
     r"manylinux\w*_ppc64le": "pyrefly-linux-ppc64le",
     r"musllinux\w*_x86_64": "pyrefly-linux-x86_64-musl",
