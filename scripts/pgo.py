@@ -258,8 +258,9 @@ def build_with_pgo(
 ) -> None:
     host = rustc_host()
     target = target or host
-    if target != host:
-        raise RuntimeError(f"PGO training needs the host target {host}, not {target}")
+    # A static musl executable also runs on a glibc host of the same architecture.
+    if target not in (host, host.replace("-gnu", "-musl")):
+        raise RuntimeError(f"PGO training cannot run {target} executables on {host}")
     profdata = llvm_tool("llvm-profdata")
     profile_dir = target_dir / "profiles"
     shutil.rmtree(profile_dir, ignore_errors=True)
