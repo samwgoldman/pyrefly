@@ -1,0 +1,49 @@
+name: "Debug: i686 container DNS"
+
+# TEST ONLY: diagnoses DNS failures in 32-bit manylinux containers. Publishes nothing.
+
+on:
+  push:
+    branches: [ i686-debug ]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-26.04]
+        image:
+          - quay.io/pypa/manylinux2014_i686
+          - quay.io/pypa/manylinux2014_x86_64
+          - quay.io/pypa/manylinux_2_28_i686
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Host
+        run: |
+          uname -a
+          docker version --format '{{.Server.Version}}'
+          docker info --format 'driver={{.Driver}} snapshotter={{index .DriverStatus}} cgroup={{.CgroupVersion}}' || true
+          docker info 2>/dev/null | grep -iE 'storage driver|driver-type|containerd' || true
+          cat /etc/resolv.conf
+      - name: Container
+        run: |
+          docker run --rm ${{ matrix.image }} sh -c '
+            set -x
+            uname -m
+            cat /etc/resolv.conf
+            ls -li /etc/resolv.conf /etc/hosts /etc/nsswitch.conf
+            stat /etc/resolv.conf
+            getent hosts vault.centos.org; echo "getent vault rc=$?"
+            getent hosts github.com; echo "getent github rc=$?"
+            getent ahostsv4 vault.centos.org; echo "ahostsv4 rc=$?"
+            curl -sS -o /dev/null -w "%{http_code}\n" https://vault.centos.org/ ; echo "curl rc=$?"
+            python3 -c "import socket; print(socket.getaddrinfo(\"vault.centos.org\", 443))" ; echo "python rc=$?"
+            true
+          '
+      - name: Container with resolv.conf as a fresh file
+        run: |
+          printf "nameserver 8.8.8.8\n" > /tmp/resolv.conf
+          docker run --rm -v /tmp/resolv.conf:/etc/resolv.conf:ro ${{ matrix.image }} sh -c 'ls -li /etc/resolv.conf; getent hosts vault.centos.org; echo "rc=$?"'
