@@ -1,0 +1,43 @@
+name: "Test: Release artifacts (no publishing)"
+
+# TEST ONLY: builds everything a release would publish and keeps it as workflow
+# artifacts. Calls no publishing workflow and uses no secrets.
+
+on:
+  workflow_dispatch:
+  # A workflow that is not on the default branch cannot be dispatched yet.
+  push:
+    branches: [ reuse-test ]
+
+permissions:
+  contents: read
+
+jobs:
+  wheels:
+    uses: ./.github/workflows/publish_build_packages.yml
+
+  archives:
+    needs: wheels
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v7
+        with:
+          name: dist
+          path: dist
+      - run: python3 scripts/wheel_binaries.py archive dist archives
+      - uses: actions/upload-artifact@v6
+        with:
+          name: release-archives
+          path: archives
+
+  extension:
+    needs: wheels
+    uses: ./.github/workflows/ci_extension_build.yml
+    with:
+      wheels: true
+
+  extension_tests:
+    uses: ./.github/workflows/ci_extension_test.yml
