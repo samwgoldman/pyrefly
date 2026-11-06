@@ -226,7 +226,7 @@ jobs:
           architecture: ${{ matrix.platform.arch }}
       - name: Set jemalloc page size for ARM64 Linux
         if: ${{ startsWith(matrix.platform.target, 'aarch64') }}
-        run: echo "JEMALLOC_SYS_WITH_LG_PAGE=16" >> $GITHUB_ENV
+        run: echo "JEMALLOC_SYS_WITH_LG_PAGE=16" >> "$GITHUB_ENV"
       - name: Install uv for PGO training
         if: ${{ matrix.platform.pgo }}
         uses: astral-sh/setup-uv@v7

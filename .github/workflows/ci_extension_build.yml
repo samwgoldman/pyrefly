@@ -1,7 +1,18 @@
 name: "CI: Extension build"
+
+# Packages the VS Code extension for every platform. Releases package the
+# executables from the release wheels (`wheels: true`), so the extension ships
+# the same optimized binaries as PyPI. Otherwise each platform builds its own
+# executable, which is cheaper for testing the extension.
+
 on:
   workflow_dispatch:
   workflow_call:
+    inputs:
+      wheels:
+        description: 'Package the executables from the `dist` artifact of the calling run'
+        type: boolean
+        default: false
     outputs:
       pyrefly_version:
         description: 'The semver version from version.bzl (e.g. 1.2.0 or 1.2.0-dev.4)'
@@ -41,9 +52,58 @@ jobs:
           echo "PYREFLY_VERSION=$VERSION" >> $GITHUB_OUTPUT
           echo "MARKETPLACE_VERSION=$MARKETPLACE_VERSION" >> $GITHUB_OUTPUT
           echo "PRERELEASE_FLAG=$PRERELEASE_FLAG" >> $GITHUB_OUTPUT
+  package_extension:
+    needs: get_version
+    if: ${{ inputs.wheels }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: win32-x64
+            binary: pyrefly-windows-x86_64
+          - target: win32-arm64
+            binary: pyrefly-windows-arm64
+          - target: linux-x64
+            binary: pyrefly-linux-x86_64
+          - target: linux-arm64
+            binary: pyrefly-linux-arm64
+          # The extension has always shipped the ARM64 executable here.
+          - target: linux-armhf
+            binary: pyrefly-linux-arm64
+          - target: alpine-x64
+            binary: pyrefly-linux-x86_64-musl
+          - target: alpine-arm64
+            binary: pyrefly-linux-arm64-musl
+          - target: darwin-x64
+            binary: pyrefly-macos-x86_64
+          - target: darwin-arm64
+            binary: pyrefly-macos-arm64
+    steps:
+      - uses: actions/checkout@v6
+      - name: Download wheels
+        uses: actions/download-artifact@v7
+        with:
+          name: dist
+          path: dist
+      - name: Copy the executable to lsp/bin
+        run: python3 scripts/wheel_binaries.py extract dist ${{ matrix.binary }} lsp/bin
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+        working-directory: lsp/
+      - run: npx vsce package --target ${{ matrix.target }} ${{ needs.get_version.outputs.prerelease_flag }} ${{ needs.get_version.outputs.marketplace_version }}
+        working-directory: lsp/
+      - uses: actions/upload-artifact@v6
+        with:
+          name: pyrefly-${{ matrix.target }}
+          path: "lsp/*.vsix"
+
   build_extension:
     needs: get_version
-    if: ${{ success() }}
+    if: ${{ success() && !inputs.wheels }}
     strategy:
       fail-fast: false
       matrix:

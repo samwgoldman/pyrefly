@@ -63,7 +63,7 @@ jobs:
           path: dist
 
       - name: Package binaries
-        run: python3 scripts/release_archives.py dist archives
+        run: python3 scripts/wheel_binaries.py archive dist archives
 
       - name: Upload to release
         run: gh release upload "$TAG_NAME" archives/* --clobber
