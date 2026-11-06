@@ -34,7 +34,7 @@ jobs:
           - os: windows-latest
             platform: win32
             arch: x64
-          - os: windows-latest
+          - os: windows-11-arm
             platform: win32
             arch: arm64
           - os: ubuntu-latest
@@ -43,7 +43,9 @@ jobs:
           - os: ubuntu-24.04-arm
             platform: linux
             arch: arm64
-          - os: ubuntu-24.04-arm
+          # GitHub's ARM64 runners cannot run 32-bit ARM code, so the ARMv7
+          # executable runs through QEMU instead.
+          - os: ubuntu-latest
             platform: linux
             arch: armhf
           - os: ubuntu-latest
@@ -84,6 +86,12 @@ jobs:
         run: |
           mkdir -p lsp/bin && mv extracted/extension/bin/* lsp/bin/
         shell: bash
+      - name: Set up QEMU for the ARMv7 executable
+        if: ${{ matrix.arch == 'armhf' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends qemu-user-binfmt libc6-armhf-cross libgcc-s1-armhf-cross
+          echo "QEMU_LD_PREFIX=/usr/arm-linux-gnueabihf" >> "$GITHUB_ENV"
       # Now run the test
       - uses: actions/setup-node@v6
         with:

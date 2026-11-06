@@ -31,6 +31,7 @@ ARCHIVE_NAMES = {
     r"manylinux\w*_i686": "pyrefly-linux-i686",
     r"manylinux\w*_aarch64": "pyrefly-linux-arm64",
     r"manylinux\w*_ppc64le": "pyrefly-linux-ppc64le",
+    r"manylinux\w*_armv7l": "pyrefly-linux-armv7",
     r"musllinux\w*_x86_64": "pyrefly-linux-x86_64-musl",
     r"musllinux\w*_aarch64": "pyrefly-linux-arm64-musl",
     r"macosx\w*_x86_64": "pyrefly-macos-x86_64",

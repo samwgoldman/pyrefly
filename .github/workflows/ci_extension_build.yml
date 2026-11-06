@@ -68,9 +68,8 @@ jobs:
             binary: pyrefly-linux-x86_64
           - target: linux-arm64
             binary: pyrefly-linux-arm64
-          # The extension has always shipped the ARM64 executable here.
           - target: linux-armhf
-            binary: pyrefly-linux-arm64
+            binary: pyrefly-linux-armv7
           - target: alpine-x64
             binary: pyrefly-linux-x86_64-musl
           - target: alpine-arm64
@@ -112,7 +111,7 @@ jobs:
             platform: win32
             arch: x64
             github_env: $env:GITHUB_ENV
-          - os: windows-latest
+          - os: windows-11-arm
             platform: win32
             arch: arm64
             github_env: $env:GITHUB_ENV
@@ -127,11 +126,10 @@ jobs:
             # necessary for glibc 2.31
             container: ubuntu:20.04
             github_env: $GITHUB_ENV
-          - os: ubuntu-24.04-arm
+          - os: ubuntu-latest
             platform: linux
             arch: armhf
-            # necessary for glibc 2.31
-            container: ubuntu:20.04
+            rust_target: armv7-unknown-linux-gnueabihf
             github_env: $GITHUB_ENV
           - os: ubuntu-latest
             platform: alpine
@@ -169,7 +167,7 @@ jobs:
       - name: set windows cargo home
         # we need to set CARGO_HOME to a high-up directory on Windows machines, since some dependencies cloned
         # by Cargo have long paths and will cause builds/tests to fail
-        if: ${{ matrix.os == 'windows-latest' }}
+        if: ${{ matrix.platform == 'win32' }}
         run: echo "CARGO_HOME=C:\\cargo" >> ${{ matrix.github_env }}
       - name: set up rust cache
         uses: Swatinem/rust-cache@v2
