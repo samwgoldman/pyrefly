@@ -14,6 +14,7 @@ file in the format of `sha256sum`.
 """
 
 import hashlib
+import io
 import re
 import sys
 import tarfile
@@ -65,16 +66,11 @@ def main() -> None:
                 destination.writestr("pyrefly.exe", payload)
         else:
             archive = output_dir / f"{name}.tar.gz"
-            staged = output_dir / "pyrefly"
-            staged.write_bytes(payload)
-            staged.chmod(0o755)
+            info = tarfile.TarInfo("pyrefly")
+            info.size = len(payload)
+            info.mode = 0o755
             with tarfile.open(archive, "w:gz") as destination:
-                destination.add(
-                    staged,
-                    arcname="pyrefly",
-                    filter=lambda info: info.replace(uid=0, gid=0, uname="", gname=""),
-                )
-            staged.unlink()
+                destination.addfile(info, io.BytesIO(payload))
         digest = hashlib.sha256(archive.read_bytes()).hexdigest()
         archive.with_name(f"{archive.name}.sha256").write_text(
             f"{digest}  {archive.name}\n"
