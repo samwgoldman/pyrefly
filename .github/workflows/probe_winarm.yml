@@ -26,6 +26,7 @@ jobs:
           rustc -vV
       - name: Variants
         run: |
+          set +e +o pipefail
           host=$(rustc -vV | sed -n 's/host: //p')
           pd="$(rustc --print sysroot)/lib/rustlib/$host/bin/llvm-profdata"
           try() {
