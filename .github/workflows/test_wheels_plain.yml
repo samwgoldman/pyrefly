@@ -1,0 +1,16 @@
+name: "Test: release wheels, pgo: false (no publishing)"
+
+# TEST ONLY: builds the release wheels. Publishes nothing.
+
+on:
+  push:
+    branches: [ perf-test ]
+
+permissions:
+  contents: read
+
+jobs:
+  wheels:
+    uses: ./.github/workflows/publish_build_packages.yml
+    with:
+      pgo: false

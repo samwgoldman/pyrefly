@@ -1,0 +1,83 @@
+name: "Test: benchmark release executables (no publishing)"
+
+# TEST ONLY: benchmarks the executables of the two build runs named in
+# .github/bench/runs.json on each platform's native runner. Publishes nothing.
+
+on:
+  push:
+    branches: [ perf-bench ]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  bench:
+    name: ${{ matrix.platform.name }} (${{ matrix.repeat }})
+    runs-on: ${{ matrix.platform.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        repeat: [1, 2]
+        platform:
+          - {name: linux-x86_64, os: ubuntu-latest, arch: x64, archive: pyrefly-linux-x86_64, prebolt: x86_64-unknown-linux-gnu}
+          - {name: linux-x86_64-musl, os: ubuntu-latest, arch: x64, archive: pyrefly-linux-x86_64-musl, prebolt: x86_64-unknown-linux-musl}
+          - {name: linux-arm64, os: ubuntu-24.04-arm, arch: arm64, archive: pyrefly-linux-arm64}
+          - {name: macos-arm64, os: macos-15, arch: arm64, archive: pyrefly-macos-arm64}
+          - {name: macos-x86_64, os: macos-15-intel, arch: x64, archive: pyrefly-macos-x86_64}
+          - {name: windows-x86_64, os: windows-latest, arch: x64, archive: pyrefly-windows-x86_64}
+          - {name: windows-arm64, os: windows-11-arm, arch: arm64, archive: pyrefly-windows-arm64}
+    env:
+      BENCH_NAME: ${{ matrix.platform.name }} (${{ matrix.repeat }})
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          architecture: ${{ matrix.platform.arch }}
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.11.17"
+      - name: Read run IDs
+        id: runs
+        shell: bash
+        run: |
+          python -c "import json; r = json.load(open('.github/bench/runs.json')); print(f'plain={r[\"plain\"]}'); print(f'pgo={r[\"pgo\"]}')" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v7
+        with:
+          name: dist
+          path: plain
+          run-id: ${{ steps.runs.outputs.plain }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v7
+        with:
+          name: dist
+          path: pgo
+          run-id: ${{ steps.runs.outputs.pgo }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v7
+        if: ${{ matrix.platform.prebolt }}
+        with:
+          name: prebolt-${{ matrix.platform.prebolt }}
+          path: bins/prebolt
+          run-id: ${{ steps.runs.outputs.pgo }}
+          github-token: ${{ github.token }}
+      - name: Benchmark
+        shell: bash
+        run: |
+          python scripts/wheel_binaries.py extract plain ${{ matrix.platform.archive }} bins/plain
+          python scripts/wheel_binaries.py extract pgo ${{ matrix.platform.archive }} bins/pgo
+          exe=pyrefly; [ "$RUNNER_OS" = Windows ] && exe=pyrefly.exe
+          if [ -n "${{ matrix.platform.prebolt }}" ]; then
+            chmod +x bins/prebolt/pyrefly
+            set -- "pgo=$PWD/bins/prebolt/pyrefly" "pgo+bolt=$PWD/bins/pgo/$exe"
+          else
+            set -- "pgo=$PWD/bins/pgo/$exe"
+          fi
+          python .github/bench/bench.py --rounds 10 --output bench.json "plain=$PWD/bins/plain/$exe" "$@"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: bench-${{ matrix.platform.name }}-${{ matrix.repeat }}
+          path: bench.json
