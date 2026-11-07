@@ -1,0 +1,16 @@
+name: "Test: release wheels with PGO on (no publishing)"
+
+# TEST ONLY: builds the release wheels with pgo: true. Publishes nothing.
+
+on:
+  push:
+    branches: [ kyle-top-test ]
+
+permissions:
+  contents: read
+
+jobs:
+  wheels:
+    uses: ./.github/workflows/publish_build_packages.yml
+    with:
+      pgo: true
