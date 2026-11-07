@@ -550,7 +550,8 @@ def check_program_header_address(readobj: Path, binary: Path) -> None:
     """Fail unless the program headers are mapped at their file offset.
 
     Older kernels compute `AT_PHDR` from the file offset of the program header
-    table, so a binary that maps it elsewhere crashes in the dynamic loader.
+    table, so a binary that maps it elsewhere crashes in the dynamic loader, or,
+    for a static PIE, which has no `PT_PHDR`, in its own startup code.
     """
     (elf,) = json.loads(
         subprocess.check_output(
@@ -564,11 +565,22 @@ def check_program_header_address(readobj: Path, binary: Path) -> None:
         )
     )
     offset = elf["ElfHeader"]["ProgramHeaderOffset"]
-    for entry in elf["ProgramHeaders"]:
-        header = entry["ProgramHeader"]
-        if header["Type"]["Name"] == "PT_PHDR" and header["VirtualAddress"] == offset:
-            return
-    raise RuntimeError(f"Program headers are not mapped at address {offset:#x}")
+    headers = [entry["ProgramHeader"] for entry in elf["ProgramHeaders"]]
+    phdr = [h for h in headers if h["Type"]["Name"] == "PT_PHDR"]
+    if phdr:
+        address = phdr[0]["VirtualAddress"]
+    else:
+        (load,) = (
+            h
+            for h in headers
+            if h["Type"]["Name"] == "PT_LOAD"
+            and h["Offset"] <= offset < h["Offset"] + h["FileSize"]
+        )
+        address = load["VirtualAddress"] + offset - load["Offset"]
+    if address != offset:
+        raise RuntimeError(
+            f"Program headers are mapped at {address:#x}, not {offset:#x}"
+        )
 
 
 def replace_wheel_binary(wheel: Path, binary: Path) -> None:
