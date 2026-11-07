@@ -84,9 +84,6 @@ jobs:
 
   macos:
     runs-on: macos-15
-    env:
-      # `inputs.pgo` is empty in the nightly run, which optimizes.
-      PGO: ${{ matrix.platform.pgo && inputs.pgo != false }}
     strategy:
       matrix:
         platform:
@@ -108,6 +105,12 @@ jobs:
       - name: Set jemalloc page size for macOS ARM64
         if: ${{ matrix.platform.target == 'aarch64' }}
         run: echo "JEMALLOC_SYS_WITH_LG_PAGE=14" >> $GITHUB_ENV
+      # A revision from before PGO, such as an old tag that the upload workflow
+      # rebuilds, has no scripts/pgo.py and builds without it. `inputs.pgo` is
+      # empty in the nightly run, which optimizes.
+      - name: Decide whether to use PGO
+        shell: bash
+        run: echo "PGO=${{ matrix.platform.pgo && inputs.pgo != false && hashFiles('scripts/pgo.py') != '' }}" >> "$GITHUB_ENV"
       - name: Restore the PGO training corpus
         if: ${{ env.PGO == 'true' }}
         uses: actions/cache@v6
@@ -162,9 +165,6 @@ jobs:
 
   windows:
     runs-on: windows-latest
-    env:
-      # `inputs.pgo` is empty in the nightly run, which optimizes.
-      PGO: ${{ matrix.platform.pgo && inputs.pgo != false }}
     strategy:
       matrix:
         platform:
@@ -189,6 +189,12 @@ jobs:
         # we need to set CARGO_HOME to a high-up directory on Windows machines, since some dependencies cloned
         # by Cargo have long paths and will cause builds/tests to fail
         run: echo "CARGO_HOME=C:\\cargo" >> $env:GITHUB_ENV
+      # A revision from before PGO, such as an old tag that the upload workflow
+      # rebuilds, has no scripts/pgo.py and builds without it. `inputs.pgo` is
+      # empty in the nightly run, which optimizes.
+      - name: Decide whether to use PGO
+        shell: bash
+        run: echo "PGO=${{ matrix.platform.pgo && inputs.pgo != false && hashFiles('scripts/pgo.py') != '' }}" >> "$GITHUB_ENV"
       - name: Restore the PGO training corpus
         if: ${{ env.PGO == 'true' }}
         uses: actions/cache@v6
@@ -239,9 +245,6 @@ jobs:
 
   linux:
     runs-on: ${{ matrix.platform.os }}
-    env:
-      # `inputs.pgo` is empty in the nightly run, which optimizes.
-      PGO: ${{ matrix.platform.pgo && inputs.pgo != false }}
     strategy:
       matrix:
         platform:
@@ -280,6 +283,12 @@ jobs:
       - name: Set jemalloc page size for ARM64 Linux
         if: ${{ startsWith(matrix.platform.target, 'aarch64') }}
         run: echo "JEMALLOC_SYS_WITH_LG_PAGE=16" >> "$GITHUB_ENV"
+      # A revision from before PGO, such as an old tag that the upload workflow
+      # rebuilds, has no scripts/pgo.py and builds without it. `inputs.pgo` is
+      # empty in the nightly run, which optimizes.
+      - name: Decide whether to use PGO
+        shell: bash
+        run: echo "PGO=${{ matrix.platform.pgo && inputs.pgo != false && hashFiles('scripts/pgo.py') != '' }}" >> "$GITHUB_ENV"
       - name: Restore the PGO training corpus
         if: ${{ env.PGO == 'true' }}
         uses: actions/cache@v6
@@ -421,9 +430,6 @@ jobs:
 
   musllinux:
     runs-on: ${{ matrix.platform.os }}
-    env:
-      # `inputs.pgo` is empty in the nightly run, which optimizes.
-      PGO: ${{ matrix.platform.pgo && inputs.pgo != false }}
     strategy:
       matrix:
         platform:
@@ -451,6 +457,12 @@ jobs:
         # aarch64-linux builds need JEMALLOC_SYS_WITH_LG_PAGE=16, or they segfault.
         # See https://github.com/facebook/pyrefly/issues/380
         run: echo "JEMALLOC_SYS_WITH_LG_PAGE=16" >> "$GITHUB_ENV"
+      # A revision from before PGO, such as an old tag that the upload workflow
+      # rebuilds, has no scripts/pgo.py and builds without it. `inputs.pgo` is
+      # empty in the nightly run, which optimizes.
+      - name: Decide whether to use PGO
+        shell: bash
+        run: echo "PGO=${{ matrix.platform.pgo && inputs.pgo != false && hashFiles('scripts/pgo.py') != '' }}" >> "$GITHUB_ENV"
       - name: Restore the PGO training corpus
         if: ${{ env.PGO == 'true' }}
         uses: actions/cache@v6

@@ -1,0 +1,17 @@
+name: "Test: rebuild an old tag's wheels (no publishing)"
+
+# TEST ONLY: builds the 1.4.1 wheels, from before scripts/pgo.py existed, the
+# way "Publish: Upload binaries" rebuilds a tag. Publishes nothing.
+
+on:
+  push:
+    branches: [ oldtag-test ]
+
+permissions:
+  contents: read
+
+jobs:
+  wheels:
+    uses: ./.github/workflows/publish_build_packages.yml
+    with:
+      ref: b726cd5f45eec1443e0f224dedd1dd45dcfb1a5d
