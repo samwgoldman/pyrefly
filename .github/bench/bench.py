@@ -66,6 +66,8 @@ def prepare() -> Path:
                 break
             time.sleep(5 * 2**attempt)
         subprocess.run([*git, "checkout", "-q", "--detach", revision], check=True)
+    # The language-server session needs a project, which Django does not configure.
+    (WORK / "django" / "pyrefly.toml").write_text('project-includes = ["django"]\n')
     venv = WORK / "venv"
     if not venv.is_dir():
         subprocess.run(["uv", "venv", "-q", "--python", "3.12", str(venv)], check=True)
