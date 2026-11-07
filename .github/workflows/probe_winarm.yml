@@ -1,0 +1,51 @@
+name: "Probe: Windows ARM64 PGO profiles"
+# TEST ONLY: checks which instrumented builds write readable profiles. Publishes nothing.
+on:
+  push:
+    branches: [ probe-winarm ]
+permissions:
+  contents: read
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-11-arm, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: probe
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - run: |
+          rustup show active-toolchain || rustup default stable
+          rustup component add llvm-tools
+          rustc -vV
+      - name: Variants
+        run: |
+          host=$(rustc -vV | sed -n 's/host: //p')
+          pd="$(rustc --print sysroot)/lib/rustlib/$host/bin/llvm-profdata"
+          try() {
+            name=$1; shift
+            rm -rf "prof-$name"; mkdir "prof-$name"
+            if RUSTFLAGS="-Cprofile-generate=$PWD/prof-$name $RUSTFLAGS_EXTRA" CARGO_TARGET_DIR="t-$name" "$@" > "build-$name.log" 2>&1; then
+              exe=$(ls t-$name/*/release/probe.exe t-$name/release/probe.exe 2>/dev/null | head -1)
+              "$exe" a b > /dev/null
+              if "$pd" merge -o "$name.profdata" prof-$name/*.profraw 2> "merge-$name.log"; then
+                echo "$name: OK $("$pd" show "$name.profdata" | grep -E 'Total functions')"
+              else
+                echo "$name: MERGE FAILED: $(head -c 200 merge-$name.log)"
+              fi
+            else
+              echo "$name: BUILD FAILED: $(tail -5 build-$name.log)"
+            fi
+          }
+          RUSTFLAGS_EXTRA="" try plain cargo build --release
+          RUSTFLAGS_EXTRA="" try thin cargo rustc --release -- -Clto=thin
+          RUSTFLAGS_EXTRA="-Clink-arg=/OPT:NOREF -Clink-arg=/OPT:NOICF" try thin-noref cargo rustc --release -- -Clto=thin
+          RUSTFLAGS_EXTRA="-Clinker=rust-lld" try thin-lld cargo rustc --release -- -Clto=thin
+          RUSTFLAGS_EXTRA="-Clink-arg=/OPT:NOREF -Clink-arg=/OPT:NOICF" try plain-noref cargo build --release
+          RUSTFLAGS_EXTRA="" try nolto cargo build --release --config profile.release.lto=false
